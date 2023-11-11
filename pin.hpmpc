@@ -1,0 +1,163 @@
+{
+  "socName": "HPM5361",
+  "packageName": "LQFP100",
+  "functions": {
+    "init_pwm_pins": {
+      "groupOptions": {
+        "PWM.PWM0": "C",
+        "TRGM.TRGM0": "C"
+      },
+      "selectPins": {
+        "PA26": {
+          "signal": "PWM.PWM0.P[2]",
+          "padCtls": {}
+        },
+        "PA27": {
+          "signal": "PWM.PWM0.P[3]",
+          "padCtls": {}
+        },
+        "PA28": {
+          "signal": "PWM.PWM0.P[4]",
+          "padCtls": {}
+        },
+        "PA29": {
+          "signal": "PWM.PWM0.P[5]",
+          "padCtls": {}
+        },
+        "PA30": {
+          "signal": "PWM.PWM0.P[6]",
+          "padCtls": {}
+        },
+        "PA31": {
+          "signal": "PWM.PWM0.P[7]",
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_ssi_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PB09": {
+          "signal": "SEI.SEI1.CK",
+          "padCtls": {}
+        },
+        "PB08": {
+          "signal": "SEI.SEI1.DE",
+          "padCtls": {}
+        },
+        "PB11": {
+          "signal": "SEI.SEI1.RX",
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_qeiv2_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PA11": {
+          "signal": "QEI.QEI1.B",
+          "padCtls": {}
+        },
+        "PA10": {
+          "signal": "QEI.QEI1.A",
+          "padCtls": {}
+        },
+        "PA12": {
+          "signal": "QEI.QEI1.Z",
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_can3_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PY04": {
+          "signal": "CAN.CAN3.RXD",
+          "nextIOC": {
+            "signal": "PMIC.SOC.GPIO_Y[04]"
+          },
+          "padCtls": {}
+        },
+        "PY05": {
+          "signal": "CAN.CAN3.TXD",
+          "nextIOC": {
+            "signal": "PMIC.SOC.GPIO_Y[05]"
+          },
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_gpio_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PA23": {
+          "signal": "GPIO.GPIO.A[23]",
+          "padCtls": {},
+          "gpiom": {
+            "direction": "0",
+            "outputLevel": "1",
+            "select": "1",
+            "hide": [],
+            "lock": "1"
+          }
+        },
+        "PB15": {
+          "signal": "GPIO.GPIO.B[15]",
+          "padCtls": {},
+          "gpiom": {
+            "direction": "0",
+            "outputLevel": "0",
+            "select": "1",
+            "hide": [],
+            "lock": "1"
+          }
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_adc_uv_current_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PB13": {
+          "signal": "ANALOGS.ADC0.IN5",
+          "padCtls": {}
+        },
+        "PB12": {
+          "signal": "ANALOGS.ADC1.IN4",
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    },
+    "init_adc_phase_volate_pins": {
+      "groupOptions": {},
+      "selectPins": {
+        "PB09": {
+          "signal": "ANALOGS.ADC0.IN1",
+          "padCtls": {}
+        },
+        "PB08": {
+          "signal": "ANALOGS.ADC0.IN11",
+          "padCtls": {}
+        },
+        "PB11": {
+          "signal": "ANALOGS.ADC0.IN3",
+          "padCtls": {}
+        }
+      },
+      "unlockedSignals": {}
+    }
+  },
+  "selectFunctionName": "init_adc_phase_volate_pins",
+  "userLabels": {
+    "PA23": "BOARD_LED",
+    "PB15": "DRIVER_POWER",
+    "PB08": "ADC_A_U",
+    "PB09": "ADC_B_V",
+    "PB11": "ADC_D_W"
+  }
+}
