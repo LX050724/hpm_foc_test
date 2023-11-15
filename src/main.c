@@ -126,8 +126,8 @@ void adc_isr_callback(ADC16_Type *adc, uint32_t status)
 
     if (adc_calibration_status == 1)
     {
-        adc_calibration_u += current_adc.adc_u_buff[0] & 0xffff;
-        adc_calibration_w += current_adc.adc_w_buff[4] & 0xffff;
+        adc_calibration_u += (current_adc.adc_u_buff[0] >> 4) & 0xfff;
+        adc_calibration_w += (current_adc.adc_w_buff[4] >> 4) & 0xfff;
         adc_calibration_num++;
         if (adc_calibration_num == 1024)
         {
@@ -138,11 +138,11 @@ void adc_isr_callback(ADC16_Type *adc, uint32_t status)
         return;
     }
 
-    adc_raw_u = (current_adc.adc_u_buff[0] & 0xffff) - adc_calibration_u;
-    adc_raw_w = (current_adc.adc_w_buff[4] & 0xffff) - adc_calibration_w;
+    adc_raw_u = ((current_adc.adc_u_buff[0] >> 4) & 0xfff) - adc_calibration_u;
+    adc_raw_w = ((current_adc.adc_w_buff[4] >> 4) & 0xfff) - adc_calibration_w;
 
-    adc_IU = (adc_raw_u * 3.3f / 65536.0f) / 0.04f;
-    adc_IW = (adc_raw_w * 3.3f / 65536.0f) / 0.04f;
+    adc_IU = (adc_raw_u * 3.3f / 4096.0f) / 0.1f;
+    adc_IW = (adc_raw_w * 3.3f / 4096.0f) / 0.1f;
     adc_IV = 0 - adc_IU - adc_IW;
 
     foc_para.samplcurpar.cal_u = adc_raw_u;
@@ -225,16 +225,18 @@ void foc_pi_contrl(BLDC_CONTRL_PID_PARA *par)
     HPM_MOTOR_MATH_TYPE result = 0;
 
     HPM_MOTOR_MATH_TYPE curerr = 0;
+    HPM_MOTOR_MATH_TYPE int_max = (par->i_max / par->i_ki);
     // HPM_MOTOR_MATH_TYPE portion_asp = 0;
     // HPM_MOTOR_MATH_TYPE portion_asi = 0;
 
     curerr = par->target - par->cur;
     par->mem += curerr;
-    if (par->mem > 50000)
-        par->mem = 50000;
 
-    if (par->mem < -50000)
-        par->mem = -50000;
+    if (par->mem > int_max)
+        par->mem = int_max;
+
+    if (par->mem < -int_max)
+        par->mem = -int_max;
 
     result = par->i_kp * curerr + par->i_ki * par->mem;
 
@@ -267,7 +269,7 @@ int main(void)
 
     /* PWM ADC初始化 */
     pwm_init(50000, 5, 100);
-    current_adc_init(&current_adc, 21, adc_isr_callback);
+    current_adc_init(&current_adc, 25, adc_isr_callback);
 
     /* 连接PWMCH8、ADCX_PTRGI0A */
     trgm_connect(HPM_TRGM0_INPUT_SRC_PWM0_CH8REF, HPM_TRGM0_OUTPUT_SRC_ADCX_PTRGI0A, trgm_output_same_as_input, false);
@@ -279,15 +281,15 @@ int main(void)
     enable_all_pwm_output();
     printf("enable pwm\n");
 
-    foc_para.currentqpipar.i_kp = 0.4;
-    foc_para.currentqpipar.i_ki = 0.03;
-    foc_para.currentqpipar.target = 2000;
-    foc_para.currentqpipar.i_max = PWM_RELOAD * 0.6;
+    foc_para.currentqpipar.i_kp = 0.1;
+    foc_para.currentqpipar.i_ki = 0.01;
+    foc_para.currentqpipar.target = 500;
+    foc_para.currentqpipar.i_max = PWM_RELOAD * 0.9;
     foc_para.currentqpipar.func_pid = foc_pi_contrl;
 
-    foc_para.currentdpipar.i_kp = 0.4;
-    foc_para.currentdpipar.i_ki = 0.03;
-    foc_para.currentdpipar.i_max = PWM_RELOAD * 0.6;
+    foc_para.currentdpipar.i_kp = 0.1;
+    foc_para.currentdpipar.i_ki = 0.01;
+    foc_para.currentdpipar.i_max = PWM_RELOAD * 0.1;
     foc_para.currentdpipar.func_pid = foc_pi_contrl;
 
     foc_para.pwmpar.func_spwm = hpm_mcl_bldc_foc_svpwm;
