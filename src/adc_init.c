@@ -9,8 +9,10 @@ static void (*__isr_callback)(ADC16_Type *, uint32_t);
 
 static inline void init_adc_current_pins()
 {
-    HPM_IOC->PAD[IOC_PAD_PB13].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_IU:   ADC0.5 /ADC1.5  */
-    HPM_IOC->PAD[IOC_PAD_PB12].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_IW:   ADC0.4 /ADC1.4  */
+    HPM_IOC->PAD[IOC_PAD_PB01].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_VBUS: ADC0.14 /ADC1.14  */
+    HPM_IOC->PAD[IOC_PAD_PB10].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_CUR:  ADC0.2  /ADC1.2   */
+    HPM_IOC->PAD[IOC_PAD_PB13].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_IU:   ADC0.5  /ADC1.5   */
+    HPM_IOC->PAD[IOC_PAD_PB12].FUNC_CTL = IOC_PAD_FUNC_CTL_ANALOG_MASK; /* ADC_IW:   ADC0.4  /ADC1.4   */
 }
 
 void init_trigger_cfg(CurrentADC_t *self)
@@ -19,16 +21,18 @@ void init_trigger_cfg(CurrentADC_t *self)
 
     pmt_cfg.module = ADCX_MODULE_ADC16;
 
-    pmt_cfg.config.adc16.trig_len = BOARD_BLDC_ADC_PREEMPT_TRIG_LEN;
+    pmt_cfg.config.adc16.trig_len = 2;
     pmt_cfg.config.adc16.inten[0] = true;
 
     pmt_cfg.config.adc16.trig_ch = ADC16_CONFIG_TRG0A;
     pmt_cfg.config.adc16.adc_ch[0] = BOARD_BLDC_ADC_CH_U;
+    pmt_cfg.config.adc16.adc_ch[1] = BOARD_ADC_CH_VBUS;
     pmt_cfg.adc_base.adc16 = self->adc_u.adc_base.adc16;
     hpm_adc_set_preempt_config(&pmt_cfg);
 
     pmt_cfg.config.adc16.trig_ch = ADC16_CONFIG_TRG0B;
     pmt_cfg.config.adc16.adc_ch[0] = BOARD_BLDC_ADC_CH_W;
+    pmt_cfg.config.adc16.adc_ch[1] = BOARD_ADC_CH_CUR;
     pmt_cfg.adc_base.adc16 = self->adc_w.adc_base.adc16;
     hpm_adc_set_preempt_config(&pmt_cfg);
 }
@@ -59,14 +63,18 @@ void current_adc_init(CurrentADC_t *self, uint32_t sample_cycle, void (*isr_call
     ch_cfg.module = ADCX_MODULE_ADC16;
     hpm_adc_init_channel_default_config(&ch_cfg);
 
-    ch_cfg.config.adc16_ch.sample_cycle = 21;
+    ch_cfg.config.adc16_ch.sample_cycle = sample_cycle;
 
     ch_cfg.adc_base.adc16 = self->adc_u.adc_base.adc16;
     ch_cfg.config.adc16_ch.ch = BOARD_BLDC_ADC_CH_U;
     hpm_adc_channel_init(&ch_cfg);
+    ch_cfg.config.adc16_ch.ch = BOARD_ADC_CH_VBUS;
+    hpm_adc_channel_init(&ch_cfg);
 
     ch_cfg.adc_base.adc16 = self->adc_w.adc_base.adc16;
     ch_cfg.config.adc16_ch.ch = BOARD_BLDC_ADC_CH_W;
+    hpm_adc_channel_init(&ch_cfg);
+    ch_cfg.config.adc16_ch.ch = BOARD_ADC_CH_CUR;
     hpm_adc_channel_init(&ch_cfg);
 
     init_trigger_cfg(self);

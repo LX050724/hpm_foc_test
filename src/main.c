@@ -17,11 +17,28 @@
 #include "pwm_init.h"
 #include "stdbool.h"
 #include "trgm.h"
+#include "usb_config.h"
+#include "usb_dc.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <hpm_math.h>
+
+extern volatile uint8_t dtr_enable;
+extern volatile uint8_t rts_enable;
+extern void cdc_acm_init(void);
+extern void cdc_acm_data_send_with_dtr_test(void);
+extern volatile bool ep_tx_busy_flag;
 
 #define LED_FLASH_PERIOD_IN_MS 300
 #define USE_AUTO_SIMPLETIME 1
+
+typedef struct
+{
+    float data[15];
+    uint8_t tail[4];
+} just_float_data;
+
+#define BUF_NUM (2048 * 2 / sizeof(just_float_data))
 
 float hall_pos = 0;
 
@@ -32,17 +49,28 @@ float SPEED = 0.5;
 float V = 0.5;
 int16_t ele_ang_offset = 0;
 
+volatile int write_ptr;
+DMA_ATTR just_float_data vofa_data[BUF_NUM];
+
 DMA_ATTR CurrentADC_t current_adc = {.adc_u = {.adc_base.adc16 = BOARD_BLDC_ADC_U_BASE, .module = adc_module_adc16},
                                      .adc_w = {.adc_base.adc16 = BOARD_BLDC_ADC_W_BASE, .module = adc_module_adc16}};
 
-float adc_IU, adc_IV, adc_IW;
+float adc_IU;   //!<@brief U相电流
+float adc_IV;   //!<@brief V相电流
+float adc_IW;   //!<@brief W相电流
+float VBUS;     //!<@brief 母线电压
+float CUR;      //!<@brief 母线电流
+
 volatile int adc_calibration_status = 0;
 int adc_calibration_u = 0;
 int adc_calibration_w = 0;
+int adc_calibration_i = 0;
 uint32_t adc_calibration_num = 0;
 
 int16_t adc_raw_u;
 int16_t adc_raw_w;
+int16_t adc_raw_i;
+int16_t adc_raw_vbus;
 
 int32_t motor_clock_hz;
 #define PWM_FREQUENCY (50000)                       /*PWM 频率  单位HZ*/
@@ -93,14 +121,14 @@ void hpm_mcl_bldc_foc_pwmset(BLDC_CONTROL_PWMOUT_PARA *par)
         if (pwm_reload_half > par->pwm_u)
         {
             trgm_output_update_source(HPM_TRGM0, HPM_TRGM0_OUTPUT_SRC_ADCX_PTRGI0A, HPM_TRGM0_INPUT_SRC_PWM0_CH8REF);
-            hpm_adc_disable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
-            hpm_adc_enable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
+            // hpm_adc_disable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
+            // hpm_adc_enable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
         }
         else
         {
             trgm_output_update_source(HPM_TRGM0, HPM_TRGM0_OUTPUT_SRC_ADCX_PTRGI0A, HPM_TRGM0_INPUT_SRC_PWM0_CH9REF);
-            hpm_adc_enable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
-            hpm_adc_disable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
+            // hpm_adc_enable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
+            // hpm_adc_disable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
         }
 
         if (pwm_reload_half > par->pwm_w)
@@ -128,32 +156,17 @@ void adc_isr_callback(ADC16_Type *adc, uint32_t status)
     {
         adc_calibration_u += (current_adc.adc_u_buff[0] >> 4) & 0xfff;
         adc_calibration_w += (current_adc.adc_w_buff[4] >> 4) & 0xfff;
+        adc_calibration_i += (current_adc.adc_w_buff[5] >> 4) & 0xfff;
         adc_calibration_num++;
         if (adc_calibration_num == 1024)
         {
             adc_calibration_u /= 1024;
             adc_calibration_w /= 1024;
+            adc_calibration_i /= 1024;
             adc_calibration_status = 2;
         }
         return;
     }
-
-    adc_raw_u = ((current_adc.adc_u_buff[0] >> 4) & 0xfff) - adc_calibration_u;
-    adc_raw_w = ((current_adc.adc_w_buff[4] >> 4) & 0xfff) - adc_calibration_w;
-
-    adc_IU = (adc_raw_u * 3.3f / 4096.0f) / 0.1f;
-    adc_IW = (adc_raw_w * 3.3f / 4096.0f) / 0.1f;
-    adc_IV = 0 - adc_IU - adc_IW;
-
-    foc_para.samplcurpar.cal_u = adc_raw_u;
-    foc_para.samplcurpar.cal_v = 0 - adc_raw_u - adc_raw_w;
-    foc_para.samplcurpar.cal_w = adc_raw_w;
-
-    // ((void(*)(BLDC_CONTROL_FOC_PARA *))foc_para.func_dqsvpwm)(&foc_para);
-
-    board_led_write(adc == HPM_ADC0);
-
-    // motor0.adc_trig_event_callback();
 }
 
 int16_t mt6701_ang = 0;
@@ -179,35 +192,89 @@ void mt6701_isr_callback(uint32_t isr_flag)
 
     if (adc_calibration_status != 2)
         return;
+
+    adc_raw_u = ((current_adc.adc_u_buff[0] >> 4) & 0xfff) - adc_calibration_u;
+    adc_raw_vbus = ((current_adc.adc_u_buff[1] >> 4) & 0xfff);
+    adc_raw_w = ((current_adc.adc_w_buff[4] >> 4) & 0xfff) - adc_calibration_w;
+    adc_raw_i = ((current_adc.adc_w_buff[5] >> 4) & 0xfff) - adc_calibration_i;
+
+    adc_IU = (adc_raw_u * 3.3f / 4096.0f) / 0.1f;
+    adc_IW = (adc_raw_w * 3.3f / 4096.0f) / 0.1f;
+    adc_IV = 0 - adc_IU - adc_IW;
+    CUR = (adc_raw_i * 3.3f / 4096.0f) / 0.04f;
+    VBUS = (adc_raw_vbus * 3.3f / 4096.0f) * 10.0f;
+
+    // 电压保护，复位芯片恢复
+    if (VBUS < 15 || VBUS > 30)
+    {
+        disable_all_pwm_output();
+        power_enable(false);
+    }
+
+    foc_para.samplcurpar.cal_u = adc_raw_u;
+    foc_para.samplcurpar.cal_v = 0 - adc_raw_u - adc_raw_w;
+    foc_para.samplcurpar.cal_w = adc_raw_w;
+
     hpm_mcl_bldc_foc_ctrl_dq_to_pwm(&foc_para);
     hpm_mcl_bldc_foc_pwmset(&foc_para.pwmpar.pwmout);
+
+    vofa_data[write_ptr].data[0] = foc_para.currentqpipar.cur;
+    vofa_data[write_ptr].data[1] = foc_para.currentqpipar.target;
+    vofa_data[write_ptr].data[2] = foc_para.currentqpipar.outval;
+
+    vofa_data[write_ptr].data[3] = foc_para.currentdpipar.cur;
+    vofa_data[write_ptr].data[4] = foc_para.currentdpipar.target;
+    vofa_data[write_ptr].data[5] = foc_para.currentdpipar.outval;
+
+    vofa_data[write_ptr].data[6] = adc_IU;
+    vofa_data[write_ptr].data[7] = adc_IV;
+    vofa_data[write_ptr].data[8] = adc_IW;
+
+    vofa_data[write_ptr].data[9] = foc_para.electric_angle;
+
+    vofa_data[write_ptr].data[10] = VBUS;
+    vofa_data[write_ptr].data[11] = CUR;
+
+    vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
+    vofa_data[write_ptr].data[13] = foc_para.pwmpar.pwmout.pwm_v;
+    vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
+
+    /* 使能DTR才发送数据，方便vofa静止查看波形 */
+    if (dtr_enable)
+    {
+        if (write_ptr == 0)
+        {
+            if (!ep_tx_busy_flag)
+            {
+                ep_tx_busy_flag = true;
+                usbd_ep_start_write(0x81, &vofa_data[BUF_NUM / 2], sizeof(just_float_data) * BUF_NUM / 2);
+            }
+            else
+            {
+                // 丢包时翻转LED
+                board_led_toggle();
+            }
+        }
+
+        if (write_ptr == BUF_NUM / 2)
+        {
+            if (!ep_tx_busy_flag)
+            {
+                ep_tx_busy_flag = true;
+                usbd_ep_start_write(0x81, &vofa_data[0], sizeof(just_float_data) * BUF_NUM / 2);
+            }
+            else
+            {
+                board_led_toggle();
+            }
+        }
+    }
+
+    write_ptr = (write_ptr + 1) % BUF_NUM;
 }
 
 void foc_current_cal(BLDC_CONTROL_CURRENT_PARA *par)
 {
-    // par->cal_u = adc_IW;
-    // par->cal_v = adc_IV;
-    // par->cal_w = adc_IU;
-
-    // par->cal_u = adc_IW;
-    // par->cal_v = adc_IU;
-    // par->cal_w = adc_IV;
-
-    // par->cal_u = adc_IU;
-    // par->cal_v = adc_IW;
-    // par->cal_w = adc_IV;
-
-    // par->cal_u = adc_IU;
-    // par->cal_v = adc_IV;
-    // par->cal_w = adc_IW;
-
-    // par->cal_u = adc_IV;
-    // par->cal_v = adc_IU;
-    // par->cal_w = adc_IW;
-
-    // par->cal_u = adc_IV;
-    // par->cal_v = adc_IW;
-    // par->cal_w = adc_IU;
 }
 
 void pi_contrl_stub_0(BLDC_CONTRL_PID_PARA *par)
@@ -240,9 +307,12 @@ void foc_pi_contrl(BLDC_CONTRL_PID_PARA *par)
 
     result = par->i_kp * curerr + par->i_ki * par->mem;
 
-    if (result < (-par->i_max)) {
+    if (result < (-par->i_max))
+    {
         result = -par->i_max;
-    } else if (result > par->i_max) {
+    }
+    else if (result > par->i_max)
+    {
         result = par->i_max;
     }
 
@@ -254,6 +324,18 @@ int main(void)
     motor_clock_hz = clock_get_frequency(clock_mot0);
 
     board_init();
+    board_init_usb_pins();
+    intc_set_irq_priority(CONFIG_HPM_USBD_IRQn, 2);
+    cdc_acm_init();
+
+    for (int i = 0; i < BUF_NUM; i++)
+    {
+        vofa_data[i].tail[0] = 0x00;
+        vofa_data[i].tail[1] = 0x00;
+        vofa_data[i].tail[2] = 0x80;
+        vofa_data[i].tail[3] = 0x7f;
+    }
+
     board_init_led_pins();
     init_power_enable_gpio();
 
@@ -268,7 +350,7 @@ int main(void)
     trgm_connect(HPM_TRGM0_INPUT_SRC_PWM0_CH8REF, HPM_TRGM0_OUTPUT_SRC_SEI_TRIG_IN0, trgm_output_same_as_input, false);
 
     /* PWM ADC初始化 */
-    pwm_init(50000, 5, 100);
+    pwm_init(PWM_FREQUENCY, 5, 100);
     current_adc_init(&current_adc, 25, adc_isr_callback);
 
     /* 连接PWMCH8、ADCX_PTRGI0A */
@@ -332,8 +414,13 @@ int main(void)
     adc_calibration_status = 1;
     while (adc_calibration_status == 1)
         clock_cpu_delay_ms(1);
-    printf("calibration adc done u:%.3f, w:%.3f\n", adc_calibration_u * 3.3f / 65536.0f,
-           adc_calibration_w * 3.3f / 65536.0f);
+
+    /* 关闭ADC中断，完全使用SSI中断，节省CPU */
+    hpm_adc_disable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
+    hpm_adc_disable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
+
+    printf("calibration adc done u:%.3f, w:%.3f, i:%.3f\n", adc_calibration_u * 3.3f / 4096.0f,
+           adc_calibration_w * 3.3f / 4096.0f, adc_calibration_i * 3.3f / 4096.0f);
     enable_all_pwm_output();
     printf("enable pwm\n");
 

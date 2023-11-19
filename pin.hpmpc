@@ -152,7 +152,7 @@
       "unlockedSignals": {}
     }
   },
-  "selectFunctionName": "init_adc_phase_volate_pins",
+  "selectFunctionName": "init_ssi_pins",
   "userLabels": {
     "PA23": "BOARD_LED",
     "PB15": "DRIVER_POWER",

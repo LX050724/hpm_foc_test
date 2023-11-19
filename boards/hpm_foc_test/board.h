@@ -294,6 +294,10 @@
 #define BOARD_MTSEI_CTRL SEI_CTRL_1
 #define BOARD_MTSEI_IRQn IRQn_SEI1
 
+/* ADC other */
+#define BOARD_ADC_CH_VBUS 14
+#define BOARD_ADC_CH_CUR  2
+
 /* FreeRTOS Definitions */
 #define BOARD_FREERTOS_TIMER                    HPM_GPTMR2
 #define BOARD_FREERTOS_TIMER_CHANNEL            1
