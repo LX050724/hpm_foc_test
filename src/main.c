@@ -8,6 +8,7 @@
 #include "hpm_gpio_drv.h"
 #include "hpm_gpiom_drv.h"
 #include "hpm_iomux.h"
+#include "hpm_motor_math.h"
 #include "hpm_pwm_drv.h"
 #include "hpm_sei_drv.h"
 #include "hpm_soc.h"
@@ -19,9 +20,11 @@
 #include "trgm.h"
 #include "usb_config.h"
 #include "usb_dc.h"
+#include <hpm_math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <hpm_math.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern volatile uint8_t dtr_enable;
 extern volatile uint8_t rts_enable;
@@ -40,26 +43,19 @@ typedef struct
 
 #define BUF_NUM (2048 * 2 / sizeof(just_float_data))
 
-float hall_pos = 0;
-
-BLDC_CONTROL_PWM_PARA pwm_para;
 BLDC_CONTROL_FOC_PARA foc_para;
-float ang = 0;
-float SPEED = 0.5;
-float V = 0.5;
 int16_t ele_ang_offset = 0;
 
 volatile int write_ptr;
 DMA_ATTR just_float_data vofa_data[BUF_NUM];
 
-DMA_ATTR CurrentADC_t current_adc = {.adc_u = {.adc_base.adc16 = BOARD_BLDC_ADC_U_BASE, .module = adc_module_adc16},
-                                     .adc_w = {.adc_base.adc16 = BOARD_BLDC_ADC_W_BASE, .module = adc_module_adc16}};
+DMA_ATTR CurrentADC_t current_adc;
 
-float adc_IU;   //!<@brief U相电流
-float adc_IV;   //!<@brief V相电流
-float adc_IW;   //!<@brief W相电流
-float VBUS;     //!<@brief 母线电压
-float CUR;      //!<@brief 母线电流
+float adc_IU; //!<@brief U相电流
+float adc_IV; //!<@brief V相电流
+float adc_IW; //!<@brief W相电流
+float VBUS;   //!<@brief 母线电压
+float CUR;    //!<@brief 母线电流
 
 volatile int adc_calibration_status = 0;
 int adc_calibration_u = 0;
@@ -71,6 +67,9 @@ int16_t adc_raw_u;
 int16_t adc_raw_w;
 int16_t adc_raw_i;
 int16_t adc_raw_vbus;
+
+int16_t mt6701_ang = 0;
+uint8_t mt6701_status = 0;
 
 int32_t motor_clock_hz;
 #define PWM_FREQUENCY (50000)                       /*PWM 频率  单位HZ*/
@@ -169,9 +168,6 @@ void adc_isr_callback(ADC16_Type *adc, uint32_t status)
     }
 }
 
-int16_t mt6701_ang = 0;
-uint8_t mt6701_status = 0;
-
 void mt6701_isr_callback(uint32_t isr_flag)
 {
     uint32_t sample_latch_tm;
@@ -201,7 +197,7 @@ void mt6701_isr_callback(uint32_t isr_flag)
     adc_IU = (adc_raw_u * 3.3f / 4096.0f) / 0.1f;
     adc_IW = (adc_raw_w * 3.3f / 4096.0f) / 0.1f;
     adc_IV = 0 - adc_IU - adc_IW;
-    CUR = (adc_raw_i * 3.3f / 4096.0f) / 0.04f;
+    CUR = (adc_raw_i * 3.3f / 4096.0f) / 0.1f;
     VBUS = (adc_raw_vbus * 3.3f / 4096.0f) * 10.0f;
 
     // 电压保护，复位芯片恢复
@@ -214,6 +210,21 @@ void mt6701_isr_callback(uint32_t isr_flag)
     foc_para.samplcurpar.cal_u = adc_raw_u;
     foc_para.samplcurpar.cal_v = 0 - adc_raw_u - adc_raw_w;
     foc_para.samplcurpar.cal_w = adc_raw_w;
+
+    float alpha, beta;
+
+    hpm_dsp_clarke_f32(adc_IU, adc_IV, &alpha, &beta);
+    float deg = ((mt6701_ang - ele_ang_offset) / (16384.0f / 7) * (2 * M_PI));
+    float sin_angle = hpm_dsp_sin_f32(deg);
+    float cos_angle = hpm_dsp_cos_f32(deg);
+
+    float iq, id;
+    hpm_dsp_park_f32(alpha, beta, &id, &iq, sin_angle, cos_angle);
+
+    float ualpha, ubeta;
+    hpm_dsp_inv_park_f32((foc_para.currentdpipar.outval * 3.3f / 4096.0f) / 0.1f,
+                         (foc_para.currentqpipar.outval * 3.3f / 4096.0f) / 0.1f, &ualpha, &ubeta, sin_angle,
+                         cos_angle);
 
     hpm_mcl_bldc_foc_ctrl_dq_to_pwm(&foc_para);
     hpm_mcl_bldc_foc_pwmset(&foc_para.pwmpar.pwmout);
@@ -238,6 +249,8 @@ void mt6701_isr_callback(uint32_t isr_flag)
     vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
     vofa_data[write_ptr].data[13] = foc_para.pwmpar.pwmout.pwm_v;
     vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
+
+    // vofa_data[write_ptr].data[14] = (float)hpm_csr_get_core_cycle() / hpm_core_clock;
 
     /* 使能DTR才发送数据，方便vofa静止查看波形 */
     if (dtr_enable)
@@ -351,6 +364,12 @@ int main(void)
 
     /* PWM ADC初始化 */
     pwm_init(PWM_FREQUENCY, 5, 100);
+
+    current_adc.adc_u.adc_base.adc16 = BOARD_BLDC_ADC_U_BASE;
+    current_adc.adc_u.module = adc_module_adc16;
+    current_adc.adc_w.adc_base.adc16 = BOARD_BLDC_ADC_W_BASE;
+    current_adc.adc_w.module = adc_module_adc16;
+
     current_adc_init(&current_adc, 25, adc_isr_callback);
 
     /* 连接PWMCH8、ADCX_PTRGI0A */
@@ -363,14 +382,14 @@ int main(void)
     enable_all_pwm_output();
     printf("enable pwm\n");
 
-    foc_para.currentqpipar.i_kp = 0.1;
-    foc_para.currentqpipar.i_ki = 0.01;
-    foc_para.currentqpipar.target = 500;
+    foc_para.currentqpipar.i_kp = 50;
+    foc_para.currentqpipar.i_ki = 0.03;
+    foc_para.currentqpipar.target = 100;
     foc_para.currentqpipar.i_max = PWM_RELOAD * 0.9;
     foc_para.currentqpipar.func_pid = foc_pi_contrl;
 
-    foc_para.currentdpipar.i_kp = 0.1;
-    foc_para.currentdpipar.i_ki = 0.01;
+    foc_para.currentdpipar.i_kp = 0;
+    foc_para.currentdpipar.i_ki = 0.7;
     foc_para.currentdpipar.i_max = PWM_RELOAD * 0.1;
     foc_para.currentdpipar.func_pid = foc_pi_contrl;
 
@@ -424,54 +443,55 @@ int main(void)
     enable_all_pwm_output();
     printf("enable pwm\n");
 
-    int16_t ele_ang_offset_bak = ele_ang_offset;
     while (1)
     {
-        int c = getchar();
-        switch (c)
-        {
-        case 'q':
-            foc_para.currentdpipar.i_kp += 0.01;
-            break;
-        case 'w':
-            foc_para.currentdpipar.i_kp -= 0.01;
-            break;
-        case 'a':
-            foc_para.currentdpipar.i_ki += 0.01;
-            break;
-        case 's':
-            foc_para.currentdpipar.i_ki -= 0.01;
-            break;
-        case 'z':
-            foc_para.currentdpipar.target += 10;
-            break;
-        case 'x':
-            foc_para.currentdpipar.target -= 10;
-            break;
-        case 'e':
-            foc_para.currentqpipar.i_kp += 0.01;
-            break;
-        case 'r':
-            foc_para.currentqpipar.i_kp -= 0.01;
-            break;
-        case 'd':
-            foc_para.currentqpipar.i_ki += 0.01;
-            break;
-        case 'f':
-            foc_para.currentqpipar.i_ki -= 0.01;
-            break;
-        case 'c':
-            foc_para.currentqpipar.target += 10;
-            break;
-        case 'v':
-            foc_para.currentqpipar.target -= 10;
-            break;
-        }
-        printf("Id => p: %.2f, i: %.2f, target: %.2f\n", foc_para.currentdpipar.i_kp, foc_para.currentdpipar.i_ki,
-               foc_para.currentdpipar.target);
-        printf("Iq => p: %.2f, i: %.2f, target: %.2f\n", foc_para.currentqpipar.i_kp, foc_para.currentqpipar.i_ki,
-               foc_para.currentqpipar.target);
     }
 
     return 0;
+}
+
+typedef struct
+{
+    const char *name;
+    void (*fun)(float);
+    float *tar_val;
+} CmdCallback_t;
+
+CmdCallback_t cmd_list[] = {
+    {"exp_iq", NULL, &foc_para.currentqpipar.target}, {"id_p", NULL, &foc_para.currentdpipar.i_kp},
+    {"id_i", NULL, &foc_para.currentdpipar.i_ki},     {"iq_p", NULL, &foc_para.currentqpipar.i_kp},
+    {"iq_i", NULL, &foc_para.currentqpipar.i_ki},
+};
+
+void usbd_read_callback(char *data, uint32_t len)
+{
+    char name[64] = {};
+    float value = 0;
+    char *start = data;
+    for (int i = 0; i < len - 1; i++)
+    {
+        if (data[i] == ':')
+        {
+            strncpy(name, start, data + i - start);
+            value = strtof(&data[i + 1], &start);
+            if (start[0] == '\n')
+                start++;
+            for (int index = 0; index < sizeof(cmd_list) / sizeof(CmdCallback_t); index++)
+            {
+                if (strcmp(cmd_list[index].name, name) == 0)
+                {
+                    // printf("set %s %f\n", cmd_list[index].name, value);
+                    if (cmd_list[index].fun == NULL)
+                    {
+                        *(cmd_list[index].tar_val) = value;
+                    }
+                    else
+                    {
+                        cmd_list[index].fun(value);
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
