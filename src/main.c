@@ -9,6 +9,7 @@
 #include "hpm_gpiom_drv.h"
 #include "hpm_iomux.h"
 #include "hpm_motor_math.h"
+#include "hpm_pllctlv2_drv.h"
 #include "hpm_pwm_drv.h"
 #include "hpm_sei_drv.h"
 #include "hpm_soc.h"
@@ -31,6 +32,8 @@ extern volatile uint8_t rts_enable;
 extern void cdc_acm_init(void);
 extern void cdc_acm_data_send_with_dtr_test(void);
 extern volatile bool ep_tx_busy_flag;
+
+void foc_pi_contrl(BLDC_CONTRL_PID_PARA *par);
 
 #define LED_FLASH_PERIOD_IN_MS 300
 #define USE_AUTO_SIMPLETIME 1
@@ -69,10 +72,17 @@ int16_t adc_raw_i;
 int16_t adc_raw_vbus;
 
 int16_t mt6701_ang = 0;
+int16_t mt6701_lst_ang = 0;
 uint8_t mt6701_status = 0;
 
+BLDC_CONTRL_PID_PARA speed_pid;
+float speed, speed_last;
+float speed_filter = 1 / 0.02;
+int intr_count;
+
 int32_t motor_clock_hz;
-#define PWM_FREQUENCY (50000)                       /*PWM 频率  单位HZ*/
+#define PWM_FREQUENCY (50000) /*PWM 频率  单位HZ*/
+#define SPEED_PID_FREQUENCY (5000)
 #define PWM_RELOAD (motor_clock_hz / PWM_FREQUENCY) /*20K hz  = 200 000 000/PWM_RELOAD */
 
 /**
@@ -170,19 +180,32 @@ void adc_isr_callback(ADC16_Type *adc, uint32_t status)
 
 void mt6701_isr_callback(uint32_t isr_flag)
 {
-    uint32_t sample_latch_tm;
-    uint32_t update_latch_tm;
-    uint32_t delta;
+    gpio_write_pin(HPM_GPIO0, GPIO_OE_GPIOB, 5, 1);
+    // uint32_t sample_latch_tm;
+    // uint32_t update_latch_tm;
+    // uint32_t delta;
 
     // 获取采样时间
-    sample_latch_tm = sei_get_latch_time(BOARD_SEI, BOARD_SEI_CTRL, SEI_LATCH_0);
+    // sample_latch_tm = sei_get_latch_time(BOARD_SEI, BOARD_SEI_CTRL, SEI_LATCH_0);
     // 获取更新时间
-    update_latch_tm = sei_get_latch_time(BOARD_SEI, BOARD_SEI_CTRL, SEI_LATCH_1);
+    // update_latch_tm = sei_get_latch_time(BOARD_SEI, BOARD_SEI_CTRL, SEI_LATCH_1);
     // 计算传输时间
-    delta = (update_latch_tm > sample_latch_tm) ? (update_latch_tm - sample_latch_tm)
-                                                : (update_latch_tm - sample_latch_tm + 0xFFFFFFFFu);
+    // delta = (update_latch_tm > sample_latch_tm) ? (update_latch_tm - sample_latch_tm)
+    //                                             : (update_latch_tm - sample_latch_tm + 0xFFFFFFFFu);
     mt6701_ang = sei_get_data_value(BOARD_SEI, SEI_DAT_2);
     mt6701_status = sei_get_data_value(BOARD_SEI, SEI_DAT_3);
+    int16_t mt6701_diff = mt6701_ang - mt6701_lst_ang;
+    if (mt6701_diff > 8192)
+        mt6701_diff -= 16384;
+    if (mt6701_diff < -8192)
+        mt6701_diff += 16384;
+    mt6701_lst_ang = mt6701_ang;
+    speed += ((mt6701_diff / 16384.0f * PWM_FREQUENCY * 60) - speed_last) / speed_filter;
+    if (speed > 1000)
+        speed = 1000;
+    if (speed < -1000)
+        speed = -1000;
+    speed_last = speed;
 
     foc_para.electric_angle = (((mt6701_ang - ele_ang_offset) % (16384 / 7)) / (16384.0f / 7) * 360);
 
@@ -211,20 +234,20 @@ void mt6701_isr_callback(uint32_t isr_flag)
     foc_para.samplcurpar.cal_v = 0 - adc_raw_u - adc_raw_w;
     foc_para.samplcurpar.cal_w = adc_raw_w;
 
-    float alpha, beta;
+    // float alpha, beta;
 
-    hpm_dsp_clarke_f32(adc_IU, adc_IV, &alpha, &beta);
-    float deg = ((mt6701_ang - ele_ang_offset) / (16384.0f / 7) * (2 * M_PI));
-    float sin_angle = hpm_dsp_sin_f32(deg);
-    float cos_angle = hpm_dsp_cos_f32(deg);
+    // hpm_dsp_clarke_f32(adc_IU, adc_IV, &alpha, &beta);
+    // float deg = ((mt6701_ang - ele_ang_offset) / (16384.0f / 7) * (2 * M_PI));
+    // float sin_angle = hpm_dsp_sin_f32(deg);
+    // float cos_angle = hpm_dsp_cos_f32(deg);
 
-    float iq, id;
-    hpm_dsp_park_f32(alpha, beta, &id, &iq, sin_angle, cos_angle);
+    // float iq, id;
+    // hpm_dsp_park_f32(alpha, beta, &id, &iq, sin_angle, cos_angle);
 
-    float ualpha, ubeta;
-    hpm_dsp_inv_park_f32((foc_para.currentdpipar.outval * 3.3f / 4096.0f) / 0.1f,
-                         (foc_para.currentqpipar.outval * 3.3f / 4096.0f) / 0.1f, &ualpha, &ubeta, sin_angle,
-                         cos_angle);
+    // float ualpha, ubeta;
+    // hpm_dsp_inv_park_f32((foc_para.currentdpipar.outval * 3.3f / 4096.0f) / 0.1f,
+    //                      (foc_para.currentqpipar.outval * 3.3f / 4096.0f) / 0.1f, &ualpha, &ubeta, sin_angle,
+    //                      cos_angle);
 
     hpm_mcl_bldc_foc_ctrl_dq_to_pwm(&foc_para);
     hpm_mcl_bldc_foc_pwmset(&foc_para.pwmpar.pwmout);
@@ -246,9 +269,12 @@ void mt6701_isr_callback(uint32_t isr_flag)
     vofa_data[write_ptr].data[10] = VBUS;
     vofa_data[write_ptr].data[11] = CUR;
 
-    vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
-    vofa_data[write_ptr].data[13] = foc_para.pwmpar.pwmout.pwm_v;
-    vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
+    vofa_data[write_ptr].data[12] = speed_pid.cur;
+    vofa_data[write_ptr].data[13] = speed_pid.target;
+    // vofa_data[write_ptr].data[14] = mt6701_lst_ang;
+
+    // vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
+    // vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
 
     // vofa_data[write_ptr].data[14] = (float)hpm_csr_get_core_cycle() / hpm_core_clock;
 
@@ -283,7 +309,16 @@ void mt6701_isr_callback(uint32_t isr_flag)
         }
     }
 
+    if (++intr_count >= (PWM_FREQUENCY / SPEED_PID_FREQUENCY))
+    {
+        speed_pid.cur = speed;
+        speed_pid.func_pid(&speed_pid);
+        foc_para.currentqpipar.target = speed_pid.outval;
+        intr_count = 0;
+    }
+
     write_ptr = (write_ptr + 1) % BUF_NUM;
+    gpio_write_pin(HPM_GPIO0, GPIO_OE_GPIOB, 5, 0);
 }
 
 void foc_current_cal(BLDC_CONTROL_CURRENT_PARA *par)
@@ -334,12 +369,18 @@ void foc_pi_contrl(BLDC_CONTRL_PID_PARA *par)
 
 int main(void)
 {
-    motor_clock_hz = clock_get_frequency(clock_mot0);
 
     board_init();
     board_init_usb_pins();
     intc_set_irq_priority(CONFIG_HPM_USBD_IRQn, 2);
     cdc_acm_init();
+    motor_clock_hz = clock_get_frequency(clock_mot0);
+    printf("PWM_RELOAD=%d\n", PWM_RELOAD);
+
+    HPM_IOC->PAD[IOC_PAD_PB05].PAD_CTL = IOC_PAD_PAD_CTL_SPD_SET(3);
+    HPM_IOC->PAD[IOC_PAD_PB05].FUNC_CTL = IOC_PB05_FUNC_CTL_GPIO_B_05;
+    gpiom_set_pin_controller(HPM_GPIOM, GPIOM_ASSIGN_GPIOB, 5, gpiom_soc_gpio0);
+    gpio_set_pin_output(HPM_GPIO0, GPIO_OE_GPIOB, 5);
 
     for (int i = 0; i < BUF_NUM; i++)
     {
@@ -356,7 +397,7 @@ int main(void)
         .trig_in0_enable = true,
         .trig_in0_select = 0,
     };
-    mt6701_ssi_init(9000000, &mt6701_trigger_config, mt6701_isr_callback);
+    mt6701_ssi_init(13000000, &mt6701_trigger_config, mt6701_isr_callback);
     intc_m_enable_irq_with_priority(BOARD_MTSEI_IRQn, 1);
 
     /* 连接PWMCH8、SEI_TRIG_IN0 */
@@ -376,13 +417,26 @@ int main(void)
     trgm_connect(HPM_TRGM0_INPUT_SRC_PWM0_CH8REF, HPM_TRGM0_OUTPUT_SRC_ADCX_PTRGI0A, trgm_output_same_as_input, false);
     /* 连接PWMCH9、ADCX_PTRGI0B */
     trgm_connect(HPM_TRGM0_INPUT_SRC_PWM0_CH8REF, HPM_TRGM0_OUTPUT_SRC_ADCX_PTRGI0B, trgm_output_same_as_input, false);
+
+    /* 触发信号引出，测量ADC采样时刻或作为示波器观察波形的触发源 */
+    HPM_IOC->PAD[IOC_PAD_PA25].FUNC_CTL = IOC_PA25_FUNC_CTL_TRGM0_P_01;
+    HPM_IOC->PAD[IOC_PAD_PA25].PAD_CTL = IOC_PAD_PAD_CTL_SPD_SET(3);
+    trgm_connect(HPM_TRGM0_INPUT_SRC_PWM0_CH8REF, HPM_TRGM0_OUTPUT_SRC_MOT_GPIO1, trgm_output_same_as_input, true);
+    trgm_enable_io_output(HPM_TRGM0, 0x06);
+
     power_enable(true);
     printf("power on\n");
     clock_cpu_delay_ms(100);
     enable_all_pwm_output();
     printf("enable pwm\n");
 
-    foc_para.currentqpipar.i_kp = 50;
+    speed_pid.i_kp = 3;
+    speed_pid.i_ki = 0.01;
+    speed_pid.target = 60;
+    speed_pid.i_max = PWM_RELOAD * 0.9;
+    speed_pid.func_pid = foc_pi_contrl;
+
+    foc_para.currentqpipar.i_kp = 30;
     foc_para.currentqpipar.i_ki = 0.03;
     foc_para.currentqpipar.target = 100;
     foc_para.currentqpipar.i_max = PWM_RELOAD * 0.9;
@@ -390,7 +444,7 @@ int main(void)
 
     foc_para.currentdpipar.i_kp = 0;
     foc_para.currentdpipar.i_ki = 0.7;
-    foc_para.currentdpipar.i_max = PWM_RELOAD * 0.1;
+    foc_para.currentdpipar.i_max = PWM_RELOAD * 0.5;
     foc_para.currentdpipar.func_pid = foc_pi_contrl;
 
     foc_para.pwmpar.func_spwm = hpm_mcl_bldc_foc_svpwm;
@@ -409,6 +463,7 @@ int main(void)
     clock_cpu_delay_ms(500);
 
     ele_ang_offset = mt6701_ang - 16384;
+    // ele_ang_offset = -4037;
     foc_para.electric_angle = 0;
 
     foc_para.pwmpar.target_beta = 0;
@@ -438,6 +493,7 @@ int main(void)
     hpm_adc_disable_interrupts(&current_adc.adc_u, adc16_event_trig_complete);
     hpm_adc_disable_interrupts(&current_adc.adc_w, adc16_event_trig_complete);
 
+    // adc_calibration_i = adc_calibration_u;
     printf("calibration adc done u:%.3f, w:%.3f, i:%.3f\n", adc_calibration_u * 3.3f / 4096.0f,
            adc_calibration_w * 3.3f / 4096.0f, adc_calibration_i * 3.3f / 4096.0f);
     enable_all_pwm_output();
@@ -458,9 +514,16 @@ typedef struct
 } CmdCallback_t;
 
 CmdCallback_t cmd_list[] = {
-    {"exp_iq", NULL, &foc_para.currentqpipar.target}, {"id_p", NULL, &foc_para.currentdpipar.i_kp},
-    {"id_i", NULL, &foc_para.currentdpipar.i_ki},     {"iq_p", NULL, &foc_para.currentqpipar.i_kp},
+    {"exp_iq", NULL, &foc_para.currentqpipar.target},
+    {"id_p", NULL, &foc_para.currentdpipar.i_kp},
+    {"id_i", NULL, &foc_para.currentdpipar.i_ki},
+    {"iq_p", NULL, &foc_para.currentqpipar.i_kp},
     {"iq_i", NULL, &foc_para.currentqpipar.i_ki},
+    {"speed_p", NULL, &speed_pid.i_kp},
+    {"speed_i", NULL, &speed_pid.i_ki},
+    {"exp_speed", NULL, &speed_pid.target},
+    {"exp_id", NULL, &foc_para.currentdpipar.target},
+    {"speed_filter", NULL, &speed_filter},
 };
 
 void usbd_read_callback(char *data, uint32_t len)

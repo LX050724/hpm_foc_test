@@ -18,6 +18,7 @@ project(hpm_foc_test)
 sdk_ses_compile_options(-mabi=ilp32f)
 sdk_ses_compile_options(-march=rv32imafc)
 sdk_ses_compile_options(-O3)
+sdk_ses_compile_options(-DBOARD_SHOW_CLOCK)
 
 sdk_inc(src/usb)
 

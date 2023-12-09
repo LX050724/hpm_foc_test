@@ -16,6 +16,7 @@ static inline void mt6701_ssi_init_pins()
     HPM_IOC->PAD[IOC_PAD_PB08].FUNC_CTL = IOC_PB08_FUNC_CTL_SEI1_DE;
     HPM_IOC->PAD[IOC_PAD_PB09].FUNC_CTL = IOC_PB09_FUNC_CTL_SEI1_CK;
     HPM_IOC->PAD[IOC_PAD_PB11].FUNC_CTL = IOC_PB11_FUNC_CTL_SEI1_RX;
+    HPM_IOC->PAD[IOC_PAD_PB11].PAD_CTL = IOC_PAD_PAD_CTL_PE_SET(1) | IOC_PAD_PAD_CTL_PS_SET(1);
 }
 
 /**
@@ -39,7 +40,7 @@ int mt6701_ssi_init(uint32_t baud, sei_trigger_input_config_t *trigger_config, v
     tranceiver_config.synchronous_master_config.data_idle_high_z = false;              // 数据空闲状态高阻设置
     tranceiver_config.synchronous_master_config.data_idle_state = sei_idle_high_state; // 数据空闲状态电平设置
     tranceiver_config.synchronous_master_config.clock_idle_high_z = false;
-    tranceiver_config.synchronous_master_config.clock_idle_state = sei_idle_high_state;
+    tranceiver_config.synchronous_master_config.clock_idle_state = sei_idle_low_state;
     tranceiver_config.synchronous_master_config.baudrate = baud; // 9696969; // 波特率
     sei_tranceiver_config_init(BOARD_MTSEI, BOARD_MTSEI_CTRL, &tranceiver_config);
     uint16_t ck0_point = sei_get_xcvr_ck0_point(BOARD_MTSEI, BOARD_MTSEI_CTRL);
@@ -87,17 +88,17 @@ int mt6701_ssi_init(uint32_t baud, sei_trigger_input_config_t *trigger_config, v
     int index = 0;
     /* [3] sei 指令 */
     // 0：假读取拉低DE，波特率过高的时候占两个周期延长DE拉低时间到CK拉低时间(TL > 100ns)
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_HIGH, SEI_DAT_0, SEI_DAT_0, 1);
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_LOW, SEI_DAT_0, SEI_DAT_0, 2);
     // 1：假读取产生第一个时钟
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_FALL_RISE, SEI_DAT_0, SEI_DAT_0, 1);
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_RISE_FALL, SEI_DAT_0, SEI_DAT_0, 1);
     // 2：开始读取14bit位置数据
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_FALL_RISE, SEI_DAT_0, SEI_DAT_2, 14);
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_RISE_FALL, SEI_DAT_0, SEI_DAT_2, 14);
     // 3：4bit磁场状态
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_FALL_RISE, SEI_DAT_0, SEI_DAT_3, 4);
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_RISE_FALL, SEI_DAT_0, SEI_DAT_3, 4);
     // 4：6bit CRC
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_FALL_RISE, SEI_DAT_0, SEI_DAT_4, 6);
-    // 5：假发送拉高时钟，拉高DE
-    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_SEND, SEI_INSTR_M_CK_HIGH, SEI_DAT_0, SEI_DAT_1, 1);
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_RECV, SEI_INSTR_M_CK_RISE_FALL, SEI_DAT_0, SEI_DAT_4, 6);
+    // 5：假发送拉低时钟，拉高DE
+    sei_set_instr(BOARD_MTSEI, index++, SEI_INSTR_OP_SEND, SEI_INSTR_M_CK_LOW, SEI_DAT_0, SEI_DAT_1, 1);
 
     /* [4] 状态转换配置 */
     /* latch0 */
