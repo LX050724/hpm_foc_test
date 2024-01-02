@@ -257,16 +257,25 @@ void board_init_clock(void)
     /* Bump up DCDC voltage to 1175mv */
     pcfg_dcdc_set_voltage(HPM_PCFG, 1175);
 
+#if 1
+    /* Configure CPU to 480MHz, AXI/AHB to 240MHz */
+    sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 2, 2);
     /* Configure PLL0 Post Divider */
     pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 0, 0);    /* PLL0CLK0: 960MHz */
     pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 1, 3);    /* PLL0CLK1: 600MHz */
     pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 2, 7);    /* PLL0CLK2: 400MHz */
+    /* Configure PLL0 Frequency to 960MHz */
+    pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, 0, 960000000);
+#else
+    /* Configure PLL0 Post Divider */
+    pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 0, 0);
+    pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 1, 3);
+    pllctlv2_set_postdiv(HPM_PLLCTLV2, 0, 2, 7);
     /* Configure PLL0 Frequency to 650MHz */
-    pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, 0, 650000000);
-
+    pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, 0, 600000000);
     /* Configure CPU to 650MHz, AXI/AHB to 325MHz */
     sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 1, 2);
-
+#endif
 
     clock_update_core_clock();
 
