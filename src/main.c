@@ -21,6 +21,7 @@
 #include "trgm.h"
 #include "usb_config.h"
 #include "usb_dc.h"
+#include "can_init.h"
 #include <hpm_math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -252,35 +253,35 @@ void mt6701_isr_callback(uint32_t isr_flag)
     hpm_mcl_bldc_foc_ctrl_dq_to_pwm(&foc_para);
     hpm_mcl_bldc_foc_pwmset(&foc_para.pwmpar.pwmout);
 
-    vofa_data[write_ptr].data[0] = foc_para.currentqpipar.cur;
-    vofa_data[write_ptr].data[1] = foc_para.currentqpipar.target;
-    vofa_data[write_ptr].data[2] = foc_para.currentqpipar.outval;
-
-    vofa_data[write_ptr].data[3] = foc_para.currentdpipar.cur;
-    vofa_data[write_ptr].data[4] = foc_para.currentdpipar.target;
-    vofa_data[write_ptr].data[5] = foc_para.currentdpipar.outval;
-
-    vofa_data[write_ptr].data[6] = adc_IU;
-    vofa_data[write_ptr].data[7] = adc_IV;
-    vofa_data[write_ptr].data[8] = adc_IW;
-
-    vofa_data[write_ptr].data[9] = foc_para.electric_angle;
-
-    vofa_data[write_ptr].data[10] = VBUS;
-    vofa_data[write_ptr].data[11] = CUR;
-
-    vofa_data[write_ptr].data[12] = speed_pid.cur;
-    vofa_data[write_ptr].data[13] = speed_pid.target;
-    // vofa_data[write_ptr].data[14] = mt6701_lst_ang;
-
-    // vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
-    // vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
-
-    // vofa_data[write_ptr].data[14] = (float)hpm_csr_get_core_cycle() / hpm_core_clock;
-
     /* 使能DTR才发送数据，方便vofa静止查看波形 */
     if (dtr_enable)
     {
+        vofa_data[write_ptr].data[0] = foc_para.currentqpipar.cur;
+        vofa_data[write_ptr].data[1] = foc_para.currentqpipar.target;
+        vofa_data[write_ptr].data[2] = foc_para.currentqpipar.outval;
+
+        vofa_data[write_ptr].data[3] = foc_para.currentdpipar.cur;
+        vofa_data[write_ptr].data[4] = foc_para.currentdpipar.target;
+        vofa_data[write_ptr].data[5] = foc_para.currentdpipar.outval;
+
+        vofa_data[write_ptr].data[6] = adc_IU;
+        vofa_data[write_ptr].data[7] = adc_IV;
+        vofa_data[write_ptr].data[8] = adc_IW;
+
+        vofa_data[write_ptr].data[9] = foc_para.electric_angle;
+
+        vofa_data[write_ptr].data[10] = VBUS;
+        vofa_data[write_ptr].data[11] = CUR;
+
+        vofa_data[write_ptr].data[12] = speed_pid.cur;
+        // vofa_data[write_ptr].data[13] = _x;
+        //  vofa_data[write_ptr].data[14] = pll_speed * PWM_FREQUENCY * 60 / 2 / M_PI;
+
+        // vofa_data[write_ptr].data[12] = foc_para.pwmpar.pwmout.pwm_u;
+        // vofa_data[write_ptr].data[14] = foc_para.pwmpar.pwmout.pwm_w;
+
+        // vofa_data[write_ptr].data[14] = (float)hpm_csr_get_core_cycle() / hpm_core_clock;
+
         if (write_ptr == 0)
         {
             if (!ep_tx_busy_flag)
@@ -372,6 +373,8 @@ int main(void)
 
     board_init();
     board_init_usb_pins();
+    board_init_canfd();
+
     intc_set_irq_priority(CONFIG_HPM_USBD_IRQn, 2);
     cdc_acm_init();
     motor_clock_hz = clock_get_frequency(clock_mot0);
