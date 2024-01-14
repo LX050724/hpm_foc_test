@@ -2,7 +2,7 @@
 #include "hpm_pwm_drv.h"
 #include <stdint.h>
 
-#define DEAD_TIME_NS(t) ((uint64_t)(t) * 2ULL * 100000000ULL / (uint64_t)clock_get_frequency(clock_mot0)) // 计算t ns的死区时间值
+#define DEAD_TIME_NS(t) ((uint32_t)((t) / 1e9f * clock_get_frequency(clock_mot0) * 2)) // 计算t ns的死区时间值
 
 /**
  * @brief 复位PWM计数器
